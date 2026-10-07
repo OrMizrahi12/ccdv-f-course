@@ -1,0 +1,5 @@
+The attached PDF is the official exam guide for the Claude Certified Developer Foundations exam (CCDV-F).
+
+Using only this guide, build me a one-page study map. Start with the exam basics: number of items, item types, time limit and passing score. Then list the domains, heaviest first. Under each domain, list its skills with their weights and roughly how many of the exam's items each skill is worth.
+
+Label every number you calculate as an estimate. If the guide doesn't say something, tell me instead of guessing.
