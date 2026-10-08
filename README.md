@@ -8,6 +8,7 @@ This is independent training material. It is not affiliated with or endorsed by 
 - `setup/`: environment setup for each operating system (Python, VS Code, Node.js, git, GitHub CLI, Claude Code)
 - `lessons/<id>/`: the code exactly as it stands at the end of each lesson
 - `labs/L<n>/`: `starter/`, `solution/` and self-check tests for each module lab
+- `cheatsheets/`: one page per module, with the exam traps
 - `library/`: the lesson notes Quiz Forge reads (a frozen snapshot, `ccao-f/v1`)
 
 ## Before you start
