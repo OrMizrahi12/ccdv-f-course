@@ -1,0 +1,99 @@
+diff --git a/pricing.toml b/pricing.toml
+index 039d866..a8308b7 100644
+--- a/pricing.toml
++++ b/pricing.toml
+@@ -6,16 +6,19 @@ checked = "2026-10-08"
+ input = 1.00
+ output = 5.00
+ cache_write = 1.25   # 5-minute cache writes, times the input price
++cache_write_1h = 2.00  # 1-hour cache writes, times the input price
+ cache_read = 0.10    # cache reads, times the input price
+ 
+ [models."claude-haiku-5-5"]   # prompts up to 100k tokens
+ input = 0.10
+ output = 0.50
+ cache_write = 1.25
++cache_write_1h = 2.00  # 1-hour cache writes, times the input price
+ cache_read = 0.10
+ 
+ [models."claude-sonnet-5-5"]
+ input = 2.00
+ output = 10.00
+ cache_write = 1.25
++cache_write_1h = 2.00  # 1-hour cache writes, times the input price
+ cache_read = 0.05    # cache hits on Sonnet 5.5 cost 5% of the input price
+diff --git a/quizforge/generate.py b/quizforge/generate.py
+index 9f1e373..9b5556f 100644
+--- a/quizforge/generate.py
++++ b/quizforge/generate.py
+@@ -23,6 +23,12 @@ def user_turn(lesson_id: str, text: str, questions: int) -> str:
+     return f'<lesson id="{lesson_id}">\n{clean(text)}\n</lesson>\n\nWrite {questions} questions.'
+ 
+ 
++def cached_turn(lesson_id: str, text: str, questions: int) -> list:
++    """The user turn as two blocks: the lesson, the same in every request and every repair (cached), then the ask."""
++    lesson, ask = user_turn(lesson_id, text, questions).rsplit("\n\n", 1)
++    return [{"type": "text", "text": lesson, "cache_control": {"type": "ephemeral"}}, {"type": "text", "text": ask}]
++
++
+ def _now():
+     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+ 
+@@ -73,7 +79,7 @@ def generate_one(cfg, prices, lesson_id, version=None, client=None, out=print):
+             client,
+             cfg.model,
+             system,
+-            user_turn(lesson_id, lesson, cfg.questions),
++            cached_turn(lesson_id, lesson, cfg.questions),
+             lesson,
+             cfg.questions,
+             retries=cfg.retries,
+diff --git a/quizforge/meter.py b/quizforge/meter.py
+index 9b1bbb5..cce34e1 100644
+--- a/quizforge/meter.py
++++ b/quizforge/meter.py
+@@ -22,7 +22,9 @@ class Meter:
+         reply = self.client.messages.create(**request)
+         spent = usage.cost(self.prices, self.model, reply.usage)
+         self.requests += 1
+-        self.tokens_in += reply.usage.input_tokens
++        u = reply.usage  # all the input, cached or not (the GenAI convention, 7.2)
++        cached = (getattr(u, "cache_creation_input_tokens", 0) or 0) + (getattr(u, "cache_read_input_tokens", 0) or 0)
++        self.tokens_in += u.input_tokens + cached
+         self.tokens_out += reply.usage.output_tokens
+         self.cost += spent
+         if self.log:
+diff --git a/quizforge/repair.py b/quizforge/repair.py
+index b8af95e..ce6e653 100644
+--- a/quizforge/repair.py
++++ b/quizforge/repair.py
+@@ -63,7 +63,8 @@ def write_checked(
+         shown = found[0] if found else "pass"
+         if len(found) > 1:
+             shown += f" (+{len(found) - 1} more)"
+-        out(f"  attempt {attempt}: {message.usage.input_tokens} input tokens, {shown}")
++        read = getattr(message.usage, "cache_read_input_tokens", 0) or 0
++        out(f"  attempt {attempt}: {message.usage.input_tokens} input tokens + {read:,} read from the cache, {shown}")
+         checked(attempt, found)
+         if not found:
+             return Questions.model_validate_json(text), attempt
+diff --git a/quizforge/usage.py b/quizforge/usage.py
+index 3060428..1b0e74e 100644
+--- a/quizforge/usage.py
++++ b/quizforge/usage.py
+@@ -22,11 +22,13 @@ def load_prices(path) -> dict:
+ 
+ 
+ def cost(prices: dict, model: str, usage) -> float:
+-    """Dollars for one response, from its usage: input, output, cache writes and cache reads."""
++    """Dollars for one response, from its usage: input, output, cache writes (5-minute, 1-hour) and reads."""
+     p = prices[model]
+     write = getattr(usage, "cache_creation_input_tokens", 0) or 0
++    hour = getattr(getattr(usage, "cache_creation", None), "ephemeral_1h_input_tokens", 0) or 0  # part of write
+     read = getattr(usage, "cache_read_input_tokens", 0) or 0
+-    tokens_in = usage.input_tokens + p["cache_write"] * write + p["cache_read"] * read
++    tokens_in = (usage.input_tokens + p["cache_write"] * (write - hour) + p["cache_write_1h"] * hour
++                 + p["cache_read"] * read)
+     return (tokens_in * p["input"] + usage.output_tokens * p["output"]) / 1_000_000
+ 
+ 
