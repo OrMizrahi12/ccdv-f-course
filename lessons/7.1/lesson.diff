@@ -1,0 +1,64 @@
+diff --git a/config.toml b/config.toml
+index 959785a..d812d9b 100644
+--- a/config.toml
++++ b/config.toml
+@@ -39,3 +39,11 @@ max_usd = 0.30           # and its budget per review
+ [ask]
+ max_turns = 5            # qf ask: requests per question
+ max_usd = 0.05           # and its budget per question: spent, plus the next request's worst case
++
++[retry.generate]        # a batch-like job: it can wait for the API to recover
++max_retries = 4
++timeout = 120
++
++[retry.check]           # a person is waiting for the answer
++max_retries = 1
++timeout = 20
+diff --git a/quizforge/cli.py b/quizforge/cli.py
+index 3e36885..f8e977a 100644
+--- a/quizforge/cli.py
++++ b/quizforge/cli.py
+@@ -207,6 +207,7 @@ def ask_library(cfg, prices, question):
+ def report(result):
+     print(
+         f"{result['lesson']}: {result['status']} after {result['attempts']} attempt(s), ${result['cost']:.5f} -> {result['path']}"
++        + (f" (next: {result['decision']})" if "decision" in result else "")
+     )
+ 
+ 
+diff --git a/quizforge/generate.py b/quizforge/generate.py
+index 4304703..73186f9 100644
+--- a/quizforge/generate.py
++++ b/quizforge/generate.py
+@@ -3,7 +3,9 @@ import json
+ import time
+ from datetime import datetime, timezone
+ 
+-from quizforge import usage
++import anthropic
++
++from quizforge import retry, usage
+ from quizforge.client import make_client
+ from quizforge.config import ROOT
+ from quizforge.library import load_lesson
+@@ -51,7 +53,7 @@ def generate_one(cfg, prices, lesson_id, version=None, client=None, out=print):
+     version = version or cfg.prompt
+     system = for_schema(load_prompt(cfg.prompts, version))
+     lesson = clean(load_lesson(cfg.library, lesson_id))
+-    client = client or make_client()
++    client = client or make_client().with_options(**retry.policy("generate"))
+     rows, counted = [], {}
+ 
+     def before(messages):
+@@ -84,7 +86,10 @@ def generate_one(cfg, prices, lesson_id, version=None, client=None, out=print):
+             status="rejected", attempts=len(rows), problems=error.found or [str(error)], last_reply=error.text
+         )
+     except Refused as error:
+-        result.update(status="refused", attempts=len(rows), problems=[str(error)])
++        result.update(status="refused", attempts=len(rows), problems=[str(error)], decision="fallback")
++    except anthropic.APIError as error:  # the SDK's retries are spent, or retrying can't help
++        decision = retry.classify(error)
++        result.update(status="error", attempts=len(rows), problems=[str(error)], decision=decision.action)
+     except OverLimit as error:
+         result.update(status="over limit", attempts=len(rows), problems=[str(error)])
+     result["cost"] = round(sum(row["cost"] for row in rows), 6)
