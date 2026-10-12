@@ -1,0 +1,319 @@
+diff --git a/config.toml b/config.toml
+index d13f764..76fd061 100644
+--- a/config.toml
++++ b/config.toml
+@@ -1,7 +1,7 @@
+ # Quiz Forge settings. Model IDs and prompt versions live here, never inline in the code.
+ 
+ [model]
+-writer = "claude-haiku-4-5-20251001"   # pinned snapshot: the course default (Haiku 4.5)
++writer = "claude-haiku-5-5"            # write, its checker, check, ask and evidence (Haiku 5.5; upgrade evidence: evals/writer.py)
+ reviewer = "claude-sonnet-5-5"         # the Agent SDK reviewer (Sonnet 5.5: Haiku 4.5 failed sound questions)
+ 
+ [library]
+@@ -27,6 +27,7 @@ rejected_dir = "runs/rejected"
+ rounds = 3               # drafts per job: the first, then up to 2 revisions after the checker's verdicts
+ max_turns = 10           # requests in one writer or checker run
+ max_usd = 0.15           # the whole job's budget, writer and checker together: spent, plus the next request's worst case
++max_tokens = 4000        # each writer or checker reply; room for thinking, which counts toward it ([limits] max_tokens stays for batch)
+ 
+ [bank]
+ path = "bank"            # pending/ (written by write), approved/ and declined/ (written only by review)
+@@ -65,6 +66,9 @@ model = "claude-haiku-5-5"
+ effort = "low"
+ max_tokens = 4000       # room for thinking: it counts toward max_tokens
+ 
++[route.batch]           # batch keeps the Haiku 4.5 snapshot it was measured on: it reads reply.content[0].text and caps at [limits] max_tokens
++model = "claude-haiku-4-5-20251001"
++
+ [eval]                  # the gate reads these; they mirror evals/criteria.md, and a test keeps the two equal
+ completion = 0.9        # share of lessons done within 2 repairs
+ quotes = 1.0            # share of items whose quote is word for word in its lesson
+diff --git a/docs/runbook.md b/docs/runbook.md
+index 368769d..ad6a006 100644
+--- a/docs/runbook.md
++++ b/docs/runbook.md
+@@ -16,3 +16,24 @@
+ 
+ - Merges to main: a person, after the checks pass. Claude Code proposes; it never merges.
+ - A model or prompt change: only through a pull request with the eval gate (7.4).
++
++## Model upgrade (a release, never a quick edit)
++
++1. Read the new model's migration guide. On a branch, apply its list with Claude Code: `/claude-api migrate`. The
++   model id changes in `config.toml` only. Read the diff against the guide's list before anything runs.
++2. The rule is written before the runs (`evals/writer.py` `decide`): no rate falls more than `[eval] allowance` below
++   the baseline, and a done job stays within its budget.
++3. Run the baseline, then the candidate, on the same lessons with the same judge:
++   `python -m evals.writer --model <pinned>`, then `python -m evals.writer --model <candidate> --against <pinned>`.
++4. Read every job that didn't finish, not only the totals. A failure can be our code, not the model.
++5. Ship through a pull request: a MINOR version, a CHANGELOG entry with the evidence, a tag after the merge.
++6. Watch `qf report --by model` for a week. Keep the eval suite running.
++7. Roll back with one revert: `git revert -m 1 <the merge commit>`, then a PATCH release. Nothing else changes.
++
++## Deprecation watch
++
++- Monthly and before every release: `python -m quizforge.release --check`. It exits 1 on an alias, a model missing
++  from `models.lock.toml`, or a model the Models API calls deprecated or retired.
++- Re-read the deprecations page; update the lock's dates in the same commit.
++- "active, watch": the earliest retirement date is under 60 days away. A deprecation notice gives at least 60 days,
++  so plan the upgrade now.
+diff --git a/plugin/.claude-plugin/marketplace.json b/plugin/.claude-plugin/marketplace.json
+index b290e11..f04265b 100644
+--- a/plugin/.claude-plugin/marketplace.json
++++ b/plugin/.claude-plugin/marketplace.json
+@@ -8,7 +8,7 @@
+     {
+       "name": "quiz-forge-tools",
+       "source": "./quiz-forge-tools",
+-      "version": "1.0.0"
++      "version": "1.1.0"
+     },
+     {
+       "name": "qf-format",
+diff --git a/plugin/quiz-forge-tools/.claude-plugin/plugin.json b/plugin/quiz-forge-tools/.claude-plugin/plugin.json
+index 269ca12..0455a52 100644
+--- a/plugin/quiz-forge-tools/.claude-plugin/plugin.json
++++ b/plugin/quiz-forge-tools/.claude-plugin/plugin.json
+@@ -1,7 +1,7 @@
+ {
+   "name": "quiz-forge-tools",
+   "description": "Write and review Quiz Forge practice questions; keep bank/approved/ for people; tests before Claude stops.",
+-  "version": "1.0.0",
++  "version": "1.1.0",
+   "author": { "name": "Or Mizrahi" },
+   "dependencies": [{ "name": "qf-format", "version": "^1.0" }]
+ }
+diff --git a/quizforge/__init__.py b/quizforge/__init__.py
+index fb45640..ec40603 100644
+--- a/quizforge/__init__.py
++++ b/quizforge/__init__.py
+@@ -1,3 +1,3 @@
+ """Quiz Forge: practice exam questions from real lesson notes."""
+ 
+-__version__ = "0.1.0"
++__version__ = "0.10.0"
+diff --git a/quizforge/agent.py b/quizforge/agent.py
+index d051857..2a09d18 100644
+--- a/quizforge/agent.py
++++ b/quizforge/agent.py
+@@ -54,6 +54,8 @@ def run(meter, cfg, system, tools, act, ask, limits=Limits(), out=print, **extra
+                 content, error = act(call)
+             except Stop as stop:
+                 return Outcome(str(stop), turn, "", calls, peak)
++            if error and not str(content).strip():  # the API rejects an is_error result with empty content
++                content = f"{call.name} failed with no message: check the input and try again"
+             results.append({"type": "tool_result", "tool_use_id": call.id, "content": content, "is_error": error})
+         messages += [{"role": "assistant", "content": reply.content}, {"role": "user", "content": results}]
+     return Outcome("turn limit", limits.max_turns, "", calls, peak)
+diff --git a/quizforge/cli.py b/quizforge/cli.py
+index ee6adbb..a014a9a 100644
+--- a/quizforge/cli.py
++++ b/quizforge/cli.py
+@@ -3,6 +3,7 @@ import asyncio
+ import json
+ import re
+ import sys
++import tomllib
+ from dataclasses import replace
+ from datetime import date
+ 
+@@ -86,7 +87,7 @@ def check_items(cfg, prices, lesson_id):
+     print(f"{calls} check_quote call(s), {len(usages)} request(s), ${spent:.5f}")
+     result["review"] = verdicts
+     (cfg.output_dir / f"{lesson_id}.json").write_text(json.dumps(result, indent=2) + "\n")
+-    return 0 if verdicts and all(line.endswith(": supported") for line in verdicts) else 1
++    return 0 if verdicts and all(sources.supported(line) for line in verdicts) else 1
+ 
+ 
+ def show_evidence(cfg, prices, lesson_id):
+@@ -368,6 +369,7 @@ def main(argv=None):
+             load_prompt(cfg.prompts, cfg.prompt)
+         except (PromptChanged, ValueError) as error:
+             raise SystemExit(str(error))
++        cfg = replace(cfg, model=tomllib.loads((ROOT / "config.toml").read_text())["route"]["batch"]["model"])
+         if args.action == "submit":
+             batch_submit(cfg, args.lesson)
+         else:
+diff --git a/quizforge/config.py b/quizforge/config.py
+index 1aa0802..8c4eb7e 100644
+--- a/quizforge/config.py
++++ b/quizforge/config.py
+@@ -26,6 +26,7 @@ class Config:
+     similar: float
+     ask_turns: int
+     ask_usd: float
++    write_max_tokens: int | None = None  # [write] max_tokens: write's own cap; None keeps max_tokens
+ 
+ 
+ def load_config(path=ROOT / "config.toml"):
+@@ -50,4 +51,5 @@ def load_config(path=ROOT / "config.toml"):
+         similar=data["bank"]["similar"],
+         ask_turns=data["ask"]["max_turns"],
+         ask_usd=data["ask"]["max_usd"],
++        write_max_tokens=data["write"]["max_tokens"],
+     )
+diff --git a/quizforge/sources.py b/quizforge/sources.py
+index 00b50a4..9e5b3fb 100644
+--- a/quizforge/sources.py
++++ b/quizforge/sources.py
+@@ -95,7 +95,10 @@ def verdicts(text):
+ 
+ 
+ def supported(line):
+-    return line.rstrip(". ").endswith(": supported")
++    """True when the word right after the first colon is 'supported': 'Question 1: supported' and also
++    'Question 1: supported, the quote matches'. 'Question 1: not supported: ...' starts with another word."""
++    after = line.partition(":")[2].strip().lower()
++    return re.match(r"supported\b", after) is not None
+ 
+ 
+ def review(client, cfg, lesson_id, questions, max_turns=4, out=print):
+diff --git a/quizforge/write.py b/quizforge/write.py
+index 657e718..73fb0c2 100644
+--- a/quizforge/write.py
++++ b/quizforge/write.py
+@@ -4,7 +4,7 @@ is, or a stop fires. Writer and checker share one meter, so Limits.max_usd is th
+ Nothing here writes to bank/approved/: only review.py does, after a person's yes."""
+ 
+ import json
+-from dataclasses import dataclass, field
++from dataclasses import dataclass, field, replace
+ from datetime import UTC, datetime
+ from pathlib import Path
+ 
+@@ -112,9 +112,10 @@ def writer_act(cfg, job, out):
+                 return done, False
+             return f"no tool named {call.name!r}", True
+         except Exception as problem:
++            message = str(problem) or f"{type(problem).__name__} with no message: check the input and try again"
+             if call.name == "save_questions":
+-                out(f"    save_questions: ERROR {str(problem)[:300]}")
+-            return str(problem), True
++                out(f"    save_questions: ERROR {message[:300]}")
++            return message, True
+ 
+     return run
+ 
+@@ -184,6 +185,7 @@ def check(meter, cfg, job, limits, out=print):
+ 
+ def write(meter, cfg, lesson_id, out=print):
+     """One job: draft, check, revise, up to cfg.rounds drafts, within one turn limit per run and one budget for the job."""
++    cfg = replace(cfg, max_tokens=cfg.write_max_tokens or cfg.max_tokens)  # [write] max_tokens: room for thinking
+     job = Job(lesson_id, cfg.bank / "pending" / f"{lesson_id}.json")
+     if job.path.exists():
+         raise Waiting(
+diff --git a/tests/test_agent.py b/tests/test_agent.py
+index 0931d8b..fcf7248 100644
+--- a/tests/test_agent.py
++++ b/tests/test_agent.py
+@@ -5,7 +5,8 @@ from quizforge import agent, usage
+ from quizforge.config import ROOT, load_config
+ from quizforge.meter import Meter
+ 
+-CFG = replace(load_config(), max_tokens=1500)  # pinned: the budget math below assumes it, whatever config.toml says
++# pinned: the budget math below assumes these ($1/$5 per MTok, 1500 tokens), whatever config.toml says
++CFG = replace(load_config(), model="claude-haiku-4-5-20251001", max_tokens=1500)
+ PRICES = usage.load_prices(ROOT / "pricing.toml")
+ 
+ 
+@@ -72,6 +73,13 @@ def test_a_tool_that_raises_stop_ends_the_task_and_nothing_more_is_sent():
+     assert (result.stopped, meter.requests) == ("declined", 1)
+ 
+ 
++def test_a_tool_error_with_no_message_still_goes_back_with_one():
++    client = Script(reply("tool_use", use(1, "save_questions")), reply("end_turn", text("done")))
++    go(client, act=lambda call: ("", True))
++    result = client.requests[1]["messages"][2]["content"][0]
++    assert result["is_error"] is True and "save_questions failed" in result["content"]
++
++
+ def test_a_reply_cut_off_at_max_tokens_stops_the_task():
+     result, _ = go(Script(reply("max_tokens", text("Question 1: A team"))))
+     assert result.stopped == "cut off"
+diff --git a/tests/test_ask.py b/tests/test_ask.py
+index f7491a5..077a49a 100644
+--- a/tests/test_ask.py
++++ b/tests/test_ask.py
+@@ -11,7 +11,7 @@ from quizforge import usage
+ from quizforge.config import ROOT, load_config
+ from quizforge.meter import Meter
+ 
+-CFG = load_config()
++CFG = replace(load_config(), model="claude-haiku-4-5-20251001")  # pinned: the budget test's math is at its $1/$5 prices
+ PRICES = usage.load_prices(ROOT / "pricing.toml")
+ 
+ 
+diff --git a/tests/test_sources.py b/tests/test_sources.py
+index e35b1cd..744bb5c 100644
+--- a/tests/test_sources.py
++++ b/tests/test_sources.py
+@@ -5,7 +5,7 @@ import pytest
+ from quizforge.config import load_config
+ from quizforge.library import load_lesson
+ from quizforge.sanitize import clean
+-from quizforge.sources import NotChecked, check_quote, review, run, run_all, tools
++from quizforge.sources import NotChecked, check_quote, review, run, run_all, supported, tools
+ 
+ CFG = load_config()
+ 
+@@ -110,3 +110,20 @@ def test_review_returns_every_result_in_one_user_message_and_reads_the_verdicts(
+     assert [r["tool_use_id"] for r in second[2]["content"]] == ["toolu_1", "toolu_2"]
+     assert calls == 2 and len(usages) == 2
+     assert verdicts == ["Question 1: supported", "Question 2: not supported: the quote is about something else"]
++
++
++@pytest.mark.parametrize(
++    "line, expected",
++    [
++        ("Question 1: supported", True),
++        ("Question 1: supported.", True),
++        ("Question 1: supported, the quote is in the lesson and names the tier.", True),
++        ("Question 1: supported: the quote matches word for word.", True),
++        ("Question 2: not supported: the quote is not in the lesson", False),
++        ("Question 2: not supported", False),
++        ("Question 3: unsupported", False),
++        ("Question 3: no verdict", False),
++    ],
++)
++def test_supported_reads_the_word_after_the_colon(line, expected):
++    assert supported(line) is expected
+diff --git a/tests/test_write.py b/tests/test_write.py
+index fb03382..9c780f3 100644
+--- a/tests/test_write.py
++++ b/tests/test_write.py
+@@ -8,7 +8,8 @@ from quizforge import guards, retrieve, sources, usage, write
+ from quizforge.config import ROOT, load_config
+ from quizforge.meter import Meter
+ 
+-BASE = replace(load_config(), max_tokens=1500)  # pinned: the budget math below assumes it, whatever config.toml says
++# pinned: the budget math below assumes these ($1/$5 per MTok, 1500 tokens), whatever config.toml says
++BASE = replace(load_config(), model="claude-haiku-4-5-20251001", max_tokens=1500, write_max_tokens=1500)
+ PRICES = usage.load_prices(ROOT / "pricing.toml")
+ STEMS = [
+     "A support team answers 3,000 short chat messages a day and wants each reply fast and cheap. Which tier fits?",
+@@ -123,6 +124,24 @@ def test_done_when_every_question_is_supported_and_it_waits_in_pending(tmp_path)
+     assert [p.name for p in cfg.bank.iterdir()] == ["pending"]  # write never reaches approved/
+ 
+ 
++def test_the_writer_and_the_checker_use_the_write_max_tokens(tmp_path):
++    cfg = settings(tmp_path, write_max_tokens=3000)
++    client = Fake(saves(), verdicts(*SUPPORTED))
++    run(cfg, client)
++    assert {r["max_tokens"] for r in client.requests} == {3000}
++
++
++def test_a_writer_tool_that_fails_without_a_message_still_returns_one(tmp_path, monkeypatch):
++    def broken(library, **inputs):
++        raise Exception()
++
++    monkeypatch.setattr(write.search, "search_library", broken)
++    cfg = settings(tmp_path)
++    act = write.writer_act(cfg, write.Job("L1.3", cfg.bank / "pending" / "L1.3.json"), lambda line: None)
++    content, error = act(use(1, "search_library", query="tiers", lesson_id="L1.3"))
++    assert error is True and content.strip() and "Exception" in content
++
++
+ def test_a_question_that_isnt_supported_is_revised_in_a_fresh_context(tmp_path):
+     cfg = settings(tmp_path)
+     better = STEMS[1].replace("costly", "very costly")

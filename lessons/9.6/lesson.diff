@@ -1,0 +1,103 @@
+diff --git a/quizforge/cli.py b/quizforge/cli.py
+index a014a9a..6cf7948 100644
+--- a/quizforge/cli.py
++++ b/quizforge/cli.py
+@@ -299,6 +299,11 @@ def main(argv=None):
+     asks.add_argument("question")
+     sub.add_parser("model", help="check the pinned model against the Models API")
+     sub.add_parser("cost", help="total spend from the usage log")
++    ini = sub.add_parser("init", help="a deployment folder for another course library (then QF_HOME=<folder>)")
++    ini.add_argument("folder")
++    ini.add_argument("--library", required=True, help="a folder with MANIFEST.json and one <lesson>.md each")
++    ini.add_argument("--name", required=True)
++    ini.add_argument("--audience", required=True, help="who the questions are for, as the prompt says it")
+     evl = sub.add_parser(
+         "eval", help="--calibrate proves the judge; --gate holds generate to the criteria and baseline"
+     )
+@@ -316,6 +321,11 @@ def main(argv=None):
+     rep.add_argument("--since", default="1d", help="how far back: 1d, 12h, 90m")
+     rep.add_argument("--by", choices=["feature", "model"], default="feature")
+     args = parser.parse_args(argv)
++    if args.command == "init":  # before load_config: a new deployment needs no settings yet
++        from quizforge.init import init
++
++        print("\n".join(init(args.folder, args.library, args.name, args.audience)))
++        return 0
+ 
+     cfg = load_config()
+     prices = usage.load_prices(ROOT / "pricing.toml")
+diff --git a/quizforge/client.py b/quizforge/client.py
+index 23023c8..48d6fd7 100644
+--- a/quizforge/client.py
++++ b/quizforge/client.py
+@@ -2,6 +2,7 @@ import anthropic
+ from dotenv import load_dotenv
+ 
+ from quizforge import platforms, retry, tracing
++from quizforge.config import ROOT
+ 
+ # Claude 4.5 models and earlier accept the partial reply as the start of the assistant turn (prefill).
+ # Newer models reject prefill, so they get the partial reply inside a user message instead (streaming docs).
+@@ -12,7 +13,7 @@ DROPS = (anthropic.APIConnectionError, ConnectionError)  # a connection that bre
+ def make_client(feature=None, asynchronous=False):
+     """The one place client options are set. No feature: the SDK defaults. A feature: its [retry.<feature>]
+     policy from config.toml, if it has one, and the tracing middleware (sync only: http_span isn't async)."""
+-    load_dotenv()  # reads ANTHROPIC_API_KEY from .env; the key is never printed
++    load_dotenv(ROOT / ".env")  # this deployment's own key (QF_HOME/.env); the key is never printed
+     client = platforms.base_client(asynchronous)
+     if feature is None:
+         return client
+diff --git a/quizforge/config.py b/quizforge/config.py
+index 8c4eb7e..1f70670 100644
+--- a/quizforge/config.py
++++ b/quizforge/config.py
+@@ -1,8 +1,10 @@
++import os
+ import tomllib
+ from dataclasses import dataclass
+ from pathlib import Path
+ 
+-ROOT = Path(__file__).resolve().parent.parent
++CODE = Path(__file__).resolve().parent.parent  # this checkout: the code and the template's files
++ROOT = Path(os.environ.get("QF_HOME", CODE)).resolve()  # the deployment: its settings, library, bank and logs
+ 
+ 
+ @dataclass(frozen=True)
+diff --git a/quizforge/library_client.py b/quizforge/library_client.py
+index 1e3ea90..91163ab 100644
+--- a/quizforge/library_client.py
++++ b/quizforge/library_client.py
+@@ -3,10 +3,16 @@
+ import sys
+ 
+ from mcp import Client, StdioServerParameters
++from mcp.client.stdio import get_default_environment
+ 
+ from quizforge.config import ROOT
+ 
+-SERVER = StdioServerParameters(command=sys.executable, args=["-m", "mcp_server.server"], cwd=str(ROOT))
++SERVER = StdioServerParameters(
++    command=sys.executable,
++    args=["-m", "mcp_server.server"],
++    cwd=str(ROOT),
++    env={**get_default_environment(), "QF_HOME": str(ROOT)},  # the child gets only HOME, PATH, USER: name it
++)
+ 
+ 
+ def connect(server=SERVER):
+diff --git a/quizforge/platforms.py b/quizforge/platforms.py
+index 6eef5b7..0554d4a 100644
+--- a/quizforge/platforms.py
++++ b/quizforge/platforms.py
+@@ -4,9 +4,9 @@ import tomllib
+ 
+ import anthropic
+ 
+-from quizforge.config import ROOT
++from quizforge.config import CODE, ROOT
+ 
+-PLATFORMS = tomllib.loads((ROOT / "quizforge/platforms.toml").read_text())
++PLATFORMS = tomllib.loads((CODE / "quizforge/platforms.toml").read_text())  # ships with the code
+ USES = {   # the features Quiz Forge uses, and where
+     "structured_outputs": "generate, repair, the screen (2.4, 8.1)",
+     "files": "qf evidence (3.4)",

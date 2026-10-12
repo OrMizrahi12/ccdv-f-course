@@ -1,0 +1,73 @@
+diff --git a/quizforge/client.py b/quizforge/client.py
+index 4ebc567..8c09106 100644
+--- a/quizforge/client.py
++++ b/quizforge/client.py
+@@ -1,15 +1,22 @@
+ import anthropic
+ from dotenv import load_dotenv
+ 
++from quizforge import retry, tracing
++
+ # Claude 4.5 models and earlier accept the partial reply as the start of the assistant turn (prefill).
+ # Newer models reject prefill, so they get the partial reply inside a user message instead (streaming docs).
+ PREFILL_OK = ("claude-haiku-4-5", "claude-sonnet-4-5", "claude-opus-4-5")
+ DROPS = (anthropic.APIConnectionError, ConnectionError)  # a connection that breaks partway through a stream
+ 
+ 
+-def make_client(asynchronous=False):
++def make_client(feature=None, asynchronous=False):
++    """The one place client options are set. No feature: the SDK defaults. A feature: its [retry.<feature>]
++    policy from config.toml, if it has one, and the tracing middleware (sync only: http_span isn't async)."""
+     load_dotenv()  # reads ANTHROPIC_API_KEY from .env; the key is never printed
+-    return anthropic.AsyncAnthropic() if asynchronous else anthropic.Anthropic()
++    client = anthropic.AsyncAnthropic() if asynchronous else anthropic.Anthropic()
++    if feature is None:
++        return client
++    return client.with_options(**retry.options(feature), middleware=[tracing.http_span])
+ 
+ 
+ def continuation(model: str, messages: list, partial: str) -> list:
+diff --git a/quizforge/generate.py b/quizforge/generate.py
+index 96b37ea..c2ad190 100644
+--- a/quizforge/generate.py
++++ b/quizforge/generate.py
+@@ -67,7 +67,7 @@ def generate_one(cfg, prices, lesson_id, version=None, client=None, out=print, r
+     cfg = replace(cfg, model=route["model"], max_tokens=route["max_tokens"])
+     system = for_schema(load_prompt(cfg.prompts, version))
+     lesson = clean(load_lesson(cfg.library, lesson_id))
+-    client = client or make_client().with_options(**retry.policy("generate"), middleware=[tracing.http_span])
++    client = client or make_client("generate")
+     client = tracing.Traced(client)
+     rows, counted = [], {}
+ 
+@@ -118,7 +118,7 @@ def generate_one(cfg, prices, lesson_id, version=None, client=None, out=print, r
+ async def generate_many(cfg, prices, lesson_ids, version=None, out=print):
+     """Several lessons at once, at most cfg.concurrency in flight. The repair loop is a plain loop,
+     so each lesson runs in a worker thread; the client is shared (it's safe across threads)."""
+-    client = make_client()
++    client = make_client("generate")
+     limit = asyncio.Semaphore(cfg.concurrency)
+     start = time.perf_counter()
+ 
+diff --git a/quizforge/retry.py b/quizforge/retry.py
+index 8b815e6..0161199 100644
+--- a/quizforge/retry.py
++++ b/quizforge/retry.py
+@@ -1,4 +1,5 @@
+ """What to do about a failure. The SDK already retried the transient ones; this decides what happens next."""
++
+ import tomllib
+ from dataclasses import dataclass
+ 
+@@ -18,6 +19,11 @@ def policy(feature):
+     return tomllib.loads((ROOT / "config.toml").read_text())["retry"][feature]
+ 
+ 
++def options(feature):
++    """The same settings as policy, or {} when config.toml has no [retry.<feature>]."""
++    return tomllib.loads((ROOT / "config.toml").read_text()).get("retry", {}).get(feature, {})
++
++
+ def classify(failure, budget=None):
+     """An SDK exception or a Message -> a Decision. budget: the seconds this feature can wait."""
+     if isinstance(failure, anthropic.APIConnectionError):  # includes timeouts
