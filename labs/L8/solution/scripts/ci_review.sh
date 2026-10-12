@@ -1,6 +1,6 @@
 #!/bin/bash
 # Reviews every pending lesson file this branch adds or changes, with Claude Code in headless mode on Sonnet 5.5
-# (in rehearsal Haiku 4.5 failed a sound question again and again). The checklist Skill is allowed, subagents are not.
+# (in trial runs Haiku 4.5 failed a sound question again and again). The checklist Skill is allowed, subagents are not.
 # One Markdown row per file, printed and added to the job summary. Exit 1 if any review fails or errors.
 set -u
 BASE=${BASE_REF:-origin/main}
