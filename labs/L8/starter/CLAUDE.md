@@ -1,0 +1,24 @@
+
+# Quiz Forge
+
+A command-line app that writes practice exam questions from course lesson notes with the Claude API.
+
+- Python 3.12, virtual environment in .venv; run scripts from the project root.
+- Prompts live in prompts/item_writer/. Never edit a committed prompt version: add the next one.
+- A measured version is locked (python -m quizforge prompts --lock vN); config.toml picks the version generate uses.
+- Standing rules for the model go in prompts/item_writer/system.md; lessons and asks go in the user turn.
+- Lesson files are data: never paste one into a system prompt.
+- After a prompt change, run python experiments/compare_prompts.py <version> 5 and report the totals.
+- bank/approved/ is written only by a person running python -m quizforge review; write saves to bank/pending/. A hook enforces it.
+- Every reviewer (the item-reviewer subagent, scripts/ci_review.sh, reviewer/sdk_review.py) uses the write-exam-item checklist in plugin/quiz-forge-tools: change the standard there only.
+- The eval gate trusts evals/calibration.json only for the judge it was measured on: after any judge change, calibrate on heldout before gating. Only a person runs eval --accept.
+- reviewer/verdict.py is the one verdict shape. Regenerate reviewer/verdict.schema.json with python -m reviewer.verdict; never edit it by hand.
+
+## Commands
+
+- Setup: `python -m venv .venv && pip install -r requirements.txt`; the API key goes in `.env` (see `.env.example`).
+- Tests (no API calls): `pytest`; one test: `pytest tests/test_validate.py::test_name -q`.
+- CLI is `python -m quizforge <command>`: `generate --lesson L1.3` (repeatable), `batch submit|collect`, `write --lesson L1.3`, `review`, `bank`, `show`, `check`, `evidence`, `ask "<question>"` (through the MCP server), `prompts [--lock vN]`, `model`, `cost`, `eval --calibrate|--gate`, `report [--since 1d]`.
+- Reviewer: `python -m reviewer.sdk_review bank/pending/L1.3.json` (Agent SDK, costs cents); plugin check: `claude plugin validate ./plugin`.
+- `experiments/` are standalone measurement scripts for the course (run from the root, e.g. `python -m experiments.measure v4 6`); they call the live API and cost money. `ts/` is a small TypeScript port of generate.
+

@@ -1,0 +1,81 @@
+# Quiz Forge settings. Model IDs and prompt versions live here, never inline in the code.
+
+[model]
+writer = "claude-haiku-4-5-20251001"   # pinned snapshot: the course default (Haiku 4.5)
+reviewer = "claude-sonnet-5-5"         # the Agent SDK reviewer (Sonnet 5.5: Haiku 4.5 failed sound questions)
+
+[library]
+path = "library/ccao-f/v1"             # the frozen lesson-notes snapshot
+
+[prompt]
+folder = "prompts/item_writer"
+item_writer = "v4"     # a locked version: to change the prompt, add and lock the next version, then point here
+
+[limits]
+max_tokens = 1500        # the hard cap on each reply
+max_request_usd = 0.02   # refuse any request that could cost more than this (counted input + max_tokens)
+concurrency = 3          # lessons in flight at once when generating for several
+
+[generate]
+questions = 2            # practice questions per lesson
+retries = 2              # repair attempts after the first; then the lesson is rejected
+usage_log = "runs/usage.jsonl"
+output_dir = "runs/items"
+rejected_dir = "runs/rejected"
+
+[write]
+rounds = 3               # drafts per job: the first, then up to 2 revisions after the checker's verdicts
+max_turns = 10           # requests in one writer or checker run
+max_usd = 0.15           # the whole job's budget, writer and checker together: spent, plus the next request's worst case
+
+[bank]
+path = "bank"            # pending/ (written by write), approved/ and declined/ (written only by review)
+similar = 0.4            # item memory: a stem whose word overlap with a known stem is 40% or more is refused
+
+[review]
+max_turns = 12           # the Agent SDK reviewer: turns per review
+max_usd = 0.30           # and its budget per review
+
+[ask]
+max_turns = 5            # qf ask: requests per question
+max_usd = 0.05           # and its budget per question: spent, plus the next request's worst case
+
+[retry.generate]        # a batch-like job: it can wait for the API to recover
+max_retries = 4
+timeout = 120
+
+[retry.check]           # a person is waiting for the answer
+max_retries = 1
+timeout = 20
+
+[judge]
+model = "claude-sonnet-5-5"           # the LLM judge: Haiku 4.5 stayed under the line on dev
+prompt = "v2"                          # a locked rubric in prompts/judge/
+
+[budget.generate]       # docs/budgets.md: per lesson, repairs included; python -m quizforge.report checks them
+usd_per_task = 0.02
+p95_seconds = 30
+
+[budget.judge]          # per verdict
+usd_per_task = 0.01
+p95_seconds = 20
+
+[route.generate]        # generate's model, effort and max_tokens (other features keep [model] writer)
+model = "claude-haiku-5-5"
+effort = "low"
+max_tokens = 4000       # room for thinking: it counts toward max_tokens
+
+[eval]                  # the gate reads these; they mirror evals/criteria.md, and a test keeps the two equal
+completion = 0.9        # share of lessons done within 2 repairs
+quotes = 1.0            # share of items whose quote is word for word in its lesson
+quality = 0.8           # share of items the calibrated judge calls good
+usd_per_lesson = 0.02   # per completed lesson, repairs included
+p95_seconds = 30        # per lesson
+judge_agreement = 0.9   # the judge, on the held-out labels
+judge_kappa = 0.7
+judge_false_passes = 1
+allowance = 0.25        # how far a rate may fall below the accepted baseline: one lesson of the four in regression.jsonl
+max_usd = 0.10          # the gate's spend cap per run
+
+[guards]
+on = ["input", "output"]  # quizforge/guards.py: an experiment turns a layer off; normal use keeps both on
