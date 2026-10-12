@@ -1,0 +1,109 @@
+diff --git a/quizforge/generate.py b/quizforge/generate.py
+index 0fdc50e..96b37ea 100644
+--- a/quizforge/generate.py
++++ b/quizforge/generate.py
+@@ -14,7 +14,7 @@ from quizforge.library import load_lesson
+ from quizforge.prompts import for_schema, load_prompt
+ from quizforge.repair import Refused, RepairFailed, write_checked
+ from quizforge.sanitize import clean
+-from quizforge.security import keys
++from quizforge.security import keys, redact
+ 
+ ROUTE = tomllib.loads((ROOT / "config.toml").read_text())["route"]["generate"]  # measured in L7.6
+ 
+@@ -144,5 +144,5 @@ def _save(cfg, result):
+     keep.mkdir(parents=True, exist_ok=True)
+     (drop / f"{result['lesson']}.json").unlink(missing_ok=True)
+     path = keep / f"{result['lesson']}.json"
+-    path.write_text(json.dumps(result, indent=2) + "\n")
++    path.write_text(json.dumps(redact.redact_obj(result), indent=2) + "\n")  # stored text is redacted
+     return path.relative_to(ROOT) if path.is_relative_to(ROOT) else path
+diff --git a/quizforge/review.py b/quizforge/review.py
+index d8727ee..9a08906 100644
+--- a/quizforge/review.py
++++ b/quizforge/review.py
+@@ -5,6 +5,7 @@ import json
+ from datetime import datetime, timezone
+ 
+ from quizforge import sources
++from quizforge.security import integrity
+ 
+ 
+ def pending(cfg, lessons=None):
+@@ -63,6 +64,8 @@ def move(cfg, path, folder):
+     target.parent.mkdir(parents=True, exist_ok=True)
+     target.write_text(json.dumps(kept, indent=2) + "\n")
+     path.unlink()
++    if folder == "approved":
++        integrity.seal(cfg.bank / "approved")  # the bank as a person approved it
+     return target
+ 
+ 
+diff --git a/quizforge/sanitize.py b/quizforge/sanitize.py
+index 27ba2b3..b2a0b73 100644
+--- a/quizforge/sanitize.py
++++ b/quizforge/sanitize.py
+@@ -1,10 +1,19 @@
+ import re
+ import unicodedata
+ 
++from quizforge.security.redact import redact
++
+ TAG = re.compile(r"<\s*/?\s*lesson\b[^>]*>", re.I)
++# sections the writer never needs
++NOT_NEEDED = re.compile(r"^## Reader questions\n.*?(?=^## |\Z)", re.MULTILINE | re.DOTALL)
+ 
+ 
+ def clean(text):
+-    """A lesson is untrusted text: drop invisible characters and any lesson tag inside it."""
++    """A lesson is untrusted text: drop invisible characters and any lesson tag inside it, then minimize it."""
+     text = "".join(c for c in text if c in "\n\t" or unicodedata.category(c)[0] != "C")
+-    return TAG.sub("", text)
++    return minimize(TAG.sub("", text))
++
++
++def minimize(text):
++    """Send only what the task needs: drop the sections the writer never uses, then mask what is left."""
++    return redact(NOT_NEEDED.sub("", text))
+diff --git a/quizforge/write.py b/quizforge/write.py
+index bb3ffb7..0429d22 100644
+--- a/quizforge/write.py
++++ b/quizforge/write.py
+@@ -13,6 +13,7 @@ from quizforge.library import load_lesson
+ from quizforge.prompts import for_schema, load_prompt
+ from quizforge.sanitize import clean
+ from quizforge.schema import Question, Questions
++from quizforge.security.redact import redact_obj
+ from quizforge.validate import problems
+ 
+ SAVE = {
+@@ -90,7 +91,7 @@ def keep(cfg, job, **extra):
+         "verdicts": job.verdicts,
+         **extra,
+     }
+-    job.path.write_text(json.dumps(item, indent=2) + "\n")
++    job.path.write_text(json.dumps(redact_obj(item), indent=2) + "\n")
+ 
+ 
+ def writer_act(cfg, job, out):
+diff --git a/quizforge/writer_tools.py b/quizforge/writer_tools.py
+index f7d0a1b..f525139 100644
+--- a/quizforge/writer_tools.py
++++ b/quizforge/writer_tools.py
+@@ -6,6 +6,7 @@ from quizforge import agent, sources
+ from quizforge.library import load_lesson
+ from quizforge.sanitize import clean
+ from quizforge.schema import Question, Questions
++from quizforge.security.redact import redact_obj
+ from quizforge.tools import TOOLS
+ from quizforge.validate import problems
+ 
+@@ -39,7 +40,7 @@ def save_questions(cfg, lesson_id, questions, approve):
+         raise agent.Stop("declined")  # a person's no ends the task: it isn't Claude's to retry
+     path = cfg.output_dir.parent / "agent" / f"{lesson_id}.json"
+     path.parent.mkdir(parents=True, exist_ok=True)
+-    path.write_text(json.dumps(data.model_dump(), indent=2) + "\n")
++    path.write_text(json.dumps(redact_obj(data.model_dump()), indent=2) + "\n")
+     return f"saved {len(questions)} questions to {path.name}"
+ 
+ 
