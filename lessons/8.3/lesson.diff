@@ -1,0 +1,68 @@
+diff --git a/config.toml b/config.toml
+index b96e309..b8309c9 100644
+--- a/config.toml
++++ b/config.toml
+@@ -76,3 +76,6 @@ judge_kappa = 0.7
+ judge_false_passes = 1
+ allowance = 0.25        # how far a rate may fall below the accepted baseline: one lesson of the four in regression.jsonl
+ max_usd = 0.10          # the gate's spend cap per run
++
++[guards]
++on = ["input", "output"]  # quizforge/guards.py: an experiment turns a layer off; normal use keeps both on
+diff --git a/quizforge/write.py b/quizforge/write.py
+index 0429d22..ec4f517 100644
+--- a/quizforge/write.py
++++ b/quizforge/write.py
+@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
+ from datetime import datetime, timezone
+ from pathlib import Path
+ 
+-from quizforge import agent, memory, search, sources
++from quizforge import agent, guards, memory, search, sources
+ from quizforge.library import load_lesson
+ from quizforge.prompts import for_schema, load_prompt
+ from quizforge.sanitize import clean
+@@ -65,7 +65,7 @@ def save(cfg, job, lesson_id, questions):
+         raise sources.NotChecked(
+             f"this job writes questions for {job.lesson} only: save them with lesson_id {job.lesson}"
+         )
+-    data = Questions.model_validate({"questions": questions})
++    data = guards.draft(Questions.model_validate({"questions": questions}), seed=lesson_id)  # output layer
+     found = problems(data, clean(load_lesson(cfg.library, lesson_id)), cfg.questions)
+     known = memory.known_stems(cfg.bank, skip=job.path)  # every stem in the bank but this job's own draft
+     found += memory.repeats([q.scenario for q in data.questions], known, cfg.similar)
+@@ -100,7 +100,7 @@ def writer_act(cfg, job, out):
+     def run(call):
+         try:
+             if call.name == "search_library":
+-                found = search.search_library(cfg.library, **call.input)
++                found = guards.tool_result(cfg, search.search_library(cfg.library, **call.input))  # input layer
+                 out(f"    search_library {call.input.get('query')!r}: {', '.join(r['source'] for r in found)}")
+                 return found, False
+             if call.name == "check_quote":
+diff --git a/tests/test_write.py b/tests/test_write.py
+index ab0c410..fb03382 100644
+--- a/tests/test_write.py
++++ b/tests/test_write.py
+@@ -4,7 +4,7 @@ from types import SimpleNamespace
+ 
+ import pytest
+ 
+-from quizforge import retrieve, sources, usage, write
++from quizforge import guards, retrieve, sources, usage, write
+ from quizforge.config import ROOT, load_config
+ from quizforge.meter import Meter
+ 
+@@ -16,6 +16,12 @@ STEMS = [
+ ]
+ 
+ 
++@pytest.fixture(autouse=True)
++def no_screen(monkeypatch):
++    """The input layer calls the API: these tests keep it off. tests/test_guards.py tests it with a fake."""
++    monkeypatch.setattr(guards, "ON", {"output"})
++
++
+ def settings(tmp_path, **change):
+     return replace(BASE, bank=tmp_path / "bank", usage_log=tmp_path / "usage.jsonl", **change)
+ 
