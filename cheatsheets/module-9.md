@@ -1,6 +1,6 @@
 # Module 9 on one page: Shipping and reuse
 
-CCDV-F · Software Engineering with Claude (Domain 2): Requirements (3.4%), Life Cycle (2.8%), Configuration Management (4.1%), with API Mechanics, Software Engineering Foundations and Application Design (Modules 1 to 7): 33.1%, about 18 of 53 items, the largest domain · checked against the Claude docs, the Claude Code docs, GitHub's docs and the CCDV-F exam guide on 2026-10-12
+CCDV-F · Applications and Integration (Domain 2): Requirements (3.4%), Life Cycle (2.8%), Configuration Management (4.1%), with API Mechanics, Software Engineering Foundations and Application Design (Modules 1 to 7): 33.1%, about 18 of 53 items, the largest domain · checked against the Claude docs, the Claude Code docs, GitHub's docs and the CCDV-F exam guide on 2026-10-12
 
 | Lesson | Keep this |
 |---|---|
