@@ -1,7 +1,7 @@
 {
  "library": "ccao-f/v1-docs",
  "created": "2026-10-09",
- "note": "PDFs rendered from ccao-f/v1 (same text), and one slide from course #1 Lesson 3.2. Never edited.",
+ "note": "PDFs rendered from ccao-f/v1 (same text), and one slide from course #1 Lesson 3.2. L2.1.pdf re-rendered 2026-10-13 after the v1 L2.1 fix.",
  "files": [
   {
    "file": "L0.1.pdf",
@@ -64,8 +64,8 @@
    "lesson": "L2.1",
    "title": "Anatomy of an effective prompt",
    "pages": 3,
-   "bytes": 122089,
-   "sha256": "e2939a8a4af72b9c5aafe0bbc2a67bf73c4ceafec37d61a66c1758b5b0add0b9"
+   "bytes": 121991,
+   "sha256": "12e98395a4607ab45f4a8e686b5def33dd1519f80ba7ea2dea9a99bdbb1aeb6e"
   },
   {
    "file": "L2.2.pdf",

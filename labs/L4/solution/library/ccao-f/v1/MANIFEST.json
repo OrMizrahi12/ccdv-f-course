@@ -1,7 +1,7 @@
 {
  "library": "ccao-f/v1",
  "created": "2026-10-07",
- "note": "Final lesson notes of course #1 (CCAO-F), music credits removed. Frozen: never edited; a later snapshot is v2.",
+ "note": "Final lesson notes of course #1 (CCAO-F), music credits removed; L2.1's production jargon (two lines) rewritten 2026-10-13. Frozen otherwise; a later snapshot is v2.",
  "lessons": [
   {
    "lesson": "L0.1",
@@ -103,8 +103,8 @@
     "Rebuild a vague prompt into a complete one, for a business task and a technical task.",
     "Spot which missing part caused a weak answer, and fix that part."
    ],
-   "bytes": 14492,
-   "sha256": "a6582aae8cea031e7fd83257b57bb05574ded539a697232bc1438d44f32be693",
+   "bytes": 14454,
+   "sha256": "ca27eb0d7f7b810873f9f1c1abc5a99a441fffc215a1b4eeee7b7f0e22acec11",
    "source": "L2.1-anatomy-of-an-effective-prompt/final/lesson-notes.md"
   },
   {
